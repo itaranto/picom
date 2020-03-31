@@ -561,9 +561,9 @@ bool glx_init_rounded_corners(session_t *ps) {
 		// Fragment shader (round corners)
 		static const char *FRAG_SHADER_ROUND_CORNERS_POST =
 		    "  // colorize (red / black )\n"
-		    "  //vec4 c = mix( vec4(0.0,0.0,0.0,0.0), vec4(1.0,1.0,1.0,1.0), "
+		    "  vec4 c = mix( vec4(0.0,0.0,0.0,0.0), vec4(1.0,1.0,1.0,1.0), "
 		    "smoothstep(0.0,1.0,b) );\n"
-		    "  vec4 c = mix( vec4(1.0,1.0,1.0,1.0), vec4(0.0,0.0,0.0,0.0), "
+		    "  //vec4 c = mix( vec4(1.0,1.0,1.0,1.0), vec4(0.0,0.0,0.0,0.0), "
 		    "smoothstep(0.0,1.0,b) );\n"
 		    "  //vec4 c = mix( vec4(1.0,0.0,0.0,1.0), vec4(0.0,1.0,0.0,1.0), "
 		    "smoothstep(0.0,1.0,b) );\n"
@@ -1105,9 +1105,9 @@ bind_sampler_to_unit_with_texture(GLuint prog, GLchar const *const sampler_name,
 	glUniform1i(loc_sampler, (GLint)texture_unit);
 }
 
-bool glx_round_corners_dst(session_t *ps, const glx_texture_t *ptex attr_unused, int shader_idx,
-                           int dx, int dy, int width, int height, float z, float cr,
-                           const region_t *reg_tgt attr_unused, glx_blur_cache_t *pbc) {
+bool glx_round_corners_dst0(session_t *ps, const glx_texture_t *ptex attr_unused, int shader_idx,
+                            int dx, int dy, int width, int height, float z, float cr,
+                            const region_t *reg_tgt attr_unused, glx_blur_cache_t *pbc) {
 
 	assert(shader_idx >= 0 && shader_idx <= 1);
 	assert(ps->psglx->round_passes[0].prog);
@@ -1333,7 +1333,7 @@ glx_round_corners_dst_end:
 	return ret;
 }
 
-bool glx_round_corners_dst2(session_t *ps, const glx_texture_t *ptex, int shader_idx,
+bool glx_round_corners_dst1(session_t *ps, const glx_texture_t *ptex, int shader_idx,
                             int dx, int dy, int width, int height, float z, float cr,
                             const region_t *reg_tgt attr_unused,
                             glx_blur_cache_t *pbc attr_unused) {
@@ -1349,6 +1349,9 @@ bool glx_round_corners_dst2(session_t *ps, const glx_texture_t *ptex, int shader
 	{
 		const glx_round_pass_t *ppass = &ps->psglx->round_passes[shader_idx];
 		assert(ppass->prog);
+
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_ONE);
 
 		glUseProgram(ppass->prog);
 
@@ -1416,6 +1419,7 @@ bool glx_round_corners_dst2(session_t *ps, const glx_texture_t *ptex, int shader
 		}
 
 		glUseProgram(0);
+		glDisable(GL_BLEND);
 	}
 
 	ret = true;
@@ -1488,20 +1492,7 @@ bool glx_render(session_t *ps, struct managed_win *w attr_unused,
 		// This is all weird, but X Render is using premultiplied ARGB format, and
 		// we need to use those things to correct it. Thanks to derhass for help.
 		glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-		if (cr == 0) {
-			glColor4d(opacity, opacity, opacity, opacity);
-		} else {
-			glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
-			glx_round_corners_dst2(
-			    ps, ptex, 1, dx, dy, to_u16_checked(w->widthb),
-			    to_u16_checked(w->heightb), (float)ps->psglx->z - 0.5f,
-			    (float)cr, reg_tgt, &w->glx_round_cache);
-			glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-			// glDisable(GL_BLEND);
-			glColor4f(0.5f, 0.5f, 0.5f, 0.5f);
-			// glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-			// glColor4f(0.0f, 0.0f, 0.0f, 0.0f);
-		}
+		glColor4d(opacity, opacity, opacity, opacity);
 	}
 
 	if (!has_prog) {
