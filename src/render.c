@@ -374,7 +374,7 @@ win_round_corners(session_t *ps, struct managed_win *w, const glx_texture_t *pte
 	const auto wid = to_u16_checked(w->widthb);
 	const auto hei = to_u16_checked(w->heightb);
 
-	log_warn("x:%d y:%d w:%d h:%d", x, y, wid, hei);
+	// log_debug("x:%d y:%d w:%d h:%d", x, y, wid, hei);
 
 	switch (ps->o.backend) {
 	case BKEND_XRENDER:
