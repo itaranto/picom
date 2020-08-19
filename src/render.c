@@ -230,7 +230,7 @@ uint32_t make_rectangle(int x, int y, int wid, int hei, xcb_render_trapezoid_t t
 }
 
 void render(session_t *ps, int x, int y, int dx, int dy, int wid, int hei, double opacity,
-            bool argb, bool neg, xcb_render_picture_t pict, glx_texture_t *ptex,
+            bool argb, bool neg, int cr, xcb_render_picture_t pict, glx_texture_t *ptex,
             const region_t *reg_paint, const glx_prog_main_t *pprogram) {
 	switch (ps->o.backend) {
 	case BKEND_XRENDER:
@@ -238,12 +238,57 @@ void render(session_t *ps, int x, int y, int dx, int dy, int wid, int hei, doubl
 		auto alpha_step = (int)(opacity * MAX_ALPHA);
 		xcb_render_picture_t alpha_pict = ps->alpha_picts[alpha_step];
 		if (alpha_step != 0) {
-			uint8_t op = ((!argb && !alpha_pict) ? XCB_RENDER_PICT_OP_SRC
-			                                     : XCB_RENDER_PICT_OP_OVER);
-			xcb_render_composite(
-			    ps->c, op, pict, alpha_pict, ps->tgt_buffer.pict,
-			    to_i16_checked(x), to_i16_checked(y), 0, 0, to_i16_checked(dx),
-			    to_i16_checked(dy), to_u16_checked(wid), to_u16_checked(hei));
+			if (cr) {
+				xcb_render_picture_t p_tmp = x_create_picture_with_standard(
+				    ps->c, ps->root, wid, hei, XCB_PICT_STANDARD_ARGB_32, 0, 0);
+				xcb_render_color_t trans = {
+				    .red = 0, .blue = 0, .green = 0, .alpha = 0};
+				const xcb_rectangle_t rect = {.x = 0,
+				                              .y = 0,
+				                              .width = to_u16_checked(wid),
+				                              .height = to_u16_checked(hei)};
+				xcb_render_fill_rectangles(ps->c, XCB_RENDER_PICT_OP_SRC,
+				                           p_tmp, trans, 1, &rect);
+
+				uint32_t max_ntraps = 15;
+				xcb_render_trapezoid_t traps[4 * max_ntraps + 5];
+
+				uint32_t n = make_circle(cr, cr, cr, max_ntraps, traps);
+				n += make_circle(wid - cr, cr, cr, max_ntraps, traps + n);
+				n += make_circle(wid - cr, hei - cr, cr, max_ntraps, traps + n);
+				n += make_circle(cr, hei - cr, cr, max_ntraps, traps + n);
+				n += make_rectangle(0, cr, cr, hei - 2 * cr, traps + n);
+				n += make_rectangle(cr, 0, wid - 2 * cr, cr, traps + n);
+				n += make_rectangle(wid - cr, cr, cr, hei - 2 * cr, traps + n);
+				n += make_rectangle(cr, hei - cr, wid - 2 * cr, cr, traps + n);
+				n += make_rectangle(cr, cr, wid - 2 * cr, hei - 2 * cr,
+				                    traps + n);
+
+				xcb_render_trapezoids(
+				    ps->c, XCB_RENDER_PICT_OP_OVER, pict, p_tmp,
+				    x_get_pictfmt_for_standard(
+				        ps->c, argb ? XCB_PICT_STANDARD_ARGB_32
+				                    : XCB_PICT_STANDARD_A_8),
+				    to_i16_checked(cr), 0, n, traps);
+
+				xcb_render_composite(
+				    ps->c, XCB_RENDER_PICT_OP_OVER, p_tmp, alpha_pict,
+				    ps->tgt_buffer.pict, to_i16_checked(x), to_i16_checked(y),
+				    0, 0, to_i16_checked(dx), to_i16_checked(dy),
+				    to_u16_checked(wid), to_u16_checked(hei));
+
+				xcb_render_free_picture(ps->c, p_tmp);
+
+			} else {
+				uint8_t op =
+				    ((!argb && !alpha_pict) ? XCB_RENDER_PICT_OP_SRC
+				                            : XCB_RENDER_PICT_OP_OVER);
+				xcb_render_composite(
+				    ps->c, op, pict, alpha_pict, ps->tgt_buffer.pict,
+				    to_i16_checked(x), to_i16_checked(y), 0, 0,
+				    to_i16_checked(dx), to_i16_checked(dy),
+				    to_u16_checked(wid), to_u16_checked(hei));
+			}
 		}
 		break;
 	}
@@ -272,8 +317,8 @@ paint_region(session_t *ps, const struct managed_win *w, int x, int y, int wid, 
 	const bool argb = (w && (win_has_alpha(w) || ps->o.force_win_blend));
 	const bool neg = (w && w->invert_color);
 
-	render(ps, x, y, dx, dy, wid, hei, opacity, argb, neg, pict,
-	       (w ? w->paint.ptex : ps->root_tile_paint.ptex), reg_paint,
+	render(ps, x, y, dx, dy, wid, hei, opacity, argb, neg, (w ? w->corner_radius : 0),
+	       pict, (w ? w->paint.ptex : ps->root_tile_paint.ptex), reg_paint,
 #ifdef CONFIG_OPENGL
 	       w ? &ps->glx_prog_win : NULL
 #else
@@ -656,7 +701,7 @@ win_paint_shadow(session_t *ps, struct managed_win *w, region_t *reg_paint) {
 	}
 
 	render(ps, 0, 0, w->g.x + w->shadow_dx, w->g.y + w->shadow_dy, w->shadow_width,
-	       w->shadow_height, w->shadow_opacity, true, false, w->shadow_paint.pict,
+	       w->shadow_height, w->shadow_opacity, true, false, 0, w->shadow_paint.pict,
 	       w->shadow_paint.ptex, reg_paint, NULL);
 }
 
@@ -773,11 +818,11 @@ win_blur_background(session_t *ps, struct managed_win *w, xcb_render_picture_t t
 
 		// Minimize the region we try to blur, if the window itself is not
 		// opaque, only the frame is.
-		region_t reg_blur = win_get_bounding_shape_global_by_val(w);
+		region_t reg_blur = win_get_bounding_shape_global_by_val(w, false);
 		if (w->mode == WMODE_FRAME_TRANS && !ps->o.force_win_blend) {
 			region_t reg_noframe;
 			pixman_region32_init(&reg_noframe);
-			win_get_region_noframe_local(w, &reg_noframe);
+			win_get_region_noframe_local(w, &reg_noframe, true);
 			pixman_region32_translate(&reg_noframe, w->g.x, w->g.y);
 			pixman_region32_subtract(&reg_blur, &reg_blur, &reg_noframe);
 			pixman_region32_fini(&reg_noframe);
@@ -894,7 +939,8 @@ void paint_all(session_t *ps, struct managed_win *t, bool ignore_damage) {
 	//
 	// Whether this is beneficial is to be determined XXX
 	for (auto w = t; w; w = w->prev_trans) {
-		region_t bshape = win_get_bounding_shape_global_by_val(w);
+		region_t bshape_no_corners = win_get_bounding_shape_global_by_val(w, false);
+		region_t bshape_corners = win_get_bounding_shape_global_by_val(w, true);
 		// Painting shadow
 		if (w->shadow) {
 			// Lazy shadow building
@@ -923,7 +969,7 @@ void paint_all(session_t *ps, struct managed_win *t, bool ignore_damage) {
 			// saving GPU power and handling shaped windows (XXX
 			// unconfirmed)
 			if (!ps->o.wintype_option[w->window_type].full_shadow)
-				pixman_region32_subtract(&reg_tmp, &reg_tmp, &bshape);
+				pixman_region32_subtract(&reg_tmp, &reg_tmp, &bshape_no_corners);
 
 			if (ps->o.xinerama_shadow_crop && w->xinerama_scr >= 0 &&
 			    w->xinerama_scr < ps->xinerama_nscrs)
@@ -950,8 +996,9 @@ void paint_all(session_t *ps, struct managed_win *t, bool ignore_damage) {
 		// Remember, reg_ignore is the union of all windows above the current
 		// window.
 		pixman_region32_subtract(&reg_tmp, &region, w->reg_ignore);
-		pixman_region32_intersect(&reg_tmp, &reg_tmp, &bshape);
-		pixman_region32_fini(&bshape);
+		pixman_region32_intersect(&reg_tmp, &reg_tmp, &bshape_corners);
+		pixman_region32_fini(&bshape_corners);
+		pixman_region32_fini(&bshape_no_corners);
 
 		if (pixman_region32_not_empty(&reg_tmp)) {
 			set_tgt_clip(ps, &reg_tmp);
