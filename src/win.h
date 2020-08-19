@@ -254,6 +254,7 @@ struct managed_win {
 #ifdef CONFIG_OPENGL
 	/// Textures and FBO background blur use.
 	glx_blur_cache_t glx_blur_cache;
+	glx_blur_cache_t glx_round_cache;
 #endif
 };
 
